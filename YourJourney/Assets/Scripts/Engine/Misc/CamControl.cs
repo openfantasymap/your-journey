@@ -72,6 +72,11 @@ public class CamControl : MonoBehaviour
 	void HandleZoom()
 	{
 		float axis = Input.GetAxis( "Mouse ScrollWheel" );
+		//keyboard zoom: + / -
+		if ( Input.GetKeyDown( KeyCode.Equals ) || Input.GetKeyDown( KeyCode.Plus ) || Input.GetKeyDown( KeyCode.KeypadPlus ) )
+			axis = 1f;
+		else if ( Input.GetKeyDown( KeyCode.Minus ) || Input.GetKeyDown( KeyCode.KeypadMinus ) )
+			axis = -1f;
 		float y = cam.transform.localPosition.y;
 
 		// scroll up
@@ -103,8 +108,24 @@ public class CamControl : MonoBehaviour
 		smoothSpeed = speed;
 	}
 
+	/// <summary>
+	/// Ctrl (or Cmd/Option on macOS) + left drag rotates like a right drag, for trackpads without a right button
+	/// </summary>
+	static bool RotateModifierHeld()
+	{
+		return Input.GetKey( KeyCode.LeftControl ) || Input.GetKey( KeyCode.RightControl )
+			|| Input.GetKey( KeyCode.LeftAlt ) || Input.GetKey( KeyCode.RightAlt )
+			|| Input.GetKey( KeyCode.LeftCommand ) || Input.GetKey( KeyCode.RightCommand );
+	}
+
 	void HandleDragging()
 	{
+		if ( RotateModifierHeld() )
+		{
+			dragging = false;
+			return;
+		}
+
 		if ( Input.GetMouseButtonDown( 0 ) )
 		{
 			dragOrigin = Input.mousePosition;
@@ -162,12 +183,19 @@ public class CamControl : MonoBehaviour
 
 	void HandleRotation()
 	{
-		if ( Input.GetMouseButtonDown( 1 ) )
+		//keyboard rotation: Q / E
+		if ( Input.GetKeyDown( KeyCode.Q ) )
+			transform.DORotate( new Vector3( 0, -rotateSpeed, 0 ), rotateDuration, RotateMode.WorldAxisAdd );
+		else if ( Input.GetKeyDown( KeyCode.E ) )
+			transform.DORotate( new Vector3( 0, rotateSpeed, 0 ), rotateDuration, RotateMode.WorldAxisAdd );
+
+		bool modifier = RotateModifierHeld();
+		if ( Input.GetMouseButtonDown( 1 ) || ( modifier && Input.GetMouseButtonDown( 0 ) ) )
 		{
 			dragStart = Input.mousePosition;
 		}
 
-		if ( Input.GetMouseButton( 1 ) )
+		if ( Input.GetMouseButton( 1 ) || ( modifier && Input.GetMouseButton( 0 ) ) )
 		{
 			float d = Vector2.Distance( dragStart, Input.mousePosition );
 			float delta = GlowEngine.RemapValue( d, 0, 50, 0, rotateSpeed );

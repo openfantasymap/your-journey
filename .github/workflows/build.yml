@@ -1,0 +1,183 @@
+name: Build & Release
+
+# - every push / PR: license-free compile check against the pinned Unity version
+# - pushes to master, tags and manual runs: Windows, macOS (universal) and Linux players
+# - tags v*: players are published as a GitHub Release
+on:
+  push:
+    branches: [master]
+    tags: ['v*']
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  PROJECT_PATH: YourJourney
+  BUILD_NAME: YourJourney
+
+jobs:
+  compile-check:
+    name: Compile check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Read Unity version
+        id: unity
+        run: |
+          echo "version=$(sed -n 's/m_EditorVersion: //p' "$PROJECT_PATH/ProjectSettings/ProjectVersion.txt")" >> "$GITHUB_OUTPUT"
+
+      - name: Free disk space
+        uses: jlumbroso/free-disk-space@v1.3.1
+        with:
+          tool-cache: false
+
+      - name: Compile scripts against Unity ${{ steps.unity.outputs.version }}
+        run: |
+          docker run --rm -v "$PWD":/proj:ro \
+            unityci/editor:ubuntu-${{ steps.unity.outputs.version }}-base-3 \
+            bash /proj/.github/scripts/compile-check.sh
+
+  build:
+    name: Build ${{ matrix.name }}
+    needs: compile-check
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Windows
+            targetPlatform: StandaloneWindows64
+            artifact: windows-x64
+          - name: macOS
+            targetPlatform: StandaloneOSX
+            artifact: macos-universal
+          - name: Linux
+            targetPlatform: StandaloneLinux64
+            artifact: linux-x64
+    steps:
+      - name: Check Unity license secrets
+        env:
+          UNITY_LICENSE: ${{ secrets.UNITY_LICENSE }}
+          UNITY_SERIAL: ${{ secrets.UNITY_SERIAL }}
+          UNITY_EMAIL: ${{ secrets.UNITY_EMAIL }}
+        run: |
+          if [ -z "$UNITY_EMAIL" ] || { [ -z "$UNITY_LICENSE" ] && [ -z "$UNITY_SERIAL" ]; }; then
+            echo "::error::Set the UNITY_EMAIL, UNITY_PASSWORD and UNITY_LICENSE (or UNITY_SERIAL) repository secrets - see README.md#building-on-github"
+            exit 1
+          fi
+
+      - uses: actions/checkout@v4
+
+      - name: Free disk space
+        uses: jlumbroso/free-disk-space@v1.3.1
+        with:
+          tool-cache: false
+
+      - name: Version
+        id: version
+        run: |
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+            echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+          else
+            echo "version=0.0.0-dev.${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Cache Library
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.PROJECT_PATH }}/Library
+          key: Library-${{ matrix.targetPlatform }}-${{ hashFiles('YourJourney/Packages/manifest.json', 'YourJourney/ProjectSettings/ProjectVersion.txt') }}-${{ hashFiles('YourJourney/Assets/**') }}
+          restore-keys: |
+            Library-${{ matrix.targetPlatform }}-${{ hashFiles('YourJourney/Packages/manifest.json', 'YourJourney/ProjectSettings/ProjectVersion.txt') }}-
+
+      - name: Build
+        uses: game-ci/unity-builder@v4
+        env:
+          UNITY_LICENSE: ${{ secrets.UNITY_LICENSE }}
+          UNITY_SERIAL: ${{ secrets.UNITY_SERIAL }}
+          UNITY_EMAIL: ${{ secrets.UNITY_EMAIL }}
+          UNITY_PASSWORD: ${{ secrets.UNITY_PASSWORD }}
+        with:
+          projectPath: ${{ env.PROJECT_PATH }}
+          unityVersion: auto
+          targetPlatform: ${{ matrix.targetPlatform }}
+          buildName: ${{ env.BUILD_NAME }}
+          buildMethod: BuildScript.Build
+          versioning: Custom
+          version: ${{ steps.version.outputs.version }}
+          customParameters: -accept-apiupdate
+
+      - name: Package
+        run: |
+          mkdir -p dist
+          sudo chown -R "$(id -u):$(id -g)" build
+          cd "build/${{ matrix.targetPlatform }}"
+          rm -rf ./*_DoNotShip
+          ls -la
+          # tar keeps executable bits and symlinks; the macOS app is signed and zipped on a Mac below
+          tar -czf "$GITHUB_WORKSPACE/dist/${BUILD_NAME}-${{ matrix.artifact }}.tar.gz" .
+          if [ "${{ matrix.targetPlatform }}" = StandaloneWindows64 ]; then
+            zip -qr "$GITHUB_WORKSPACE/dist/${BUILD_NAME}-${{ matrix.artifact }}.zip" .
+            rm "$GITHUB_WORKSPACE/dist/${BUILD_NAME}-${{ matrix.artifact }}.tar.gz"
+          fi
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.targetPlatform == 'StandaloneOSX' && 'unsigned-macos' || format('dist-{0}', matrix.artifact) }}
+          path: dist/*
+          if-no-files-found: error
+
+  macos-package:
+    name: Sign & package macOS app
+    needs: build
+    runs-on: macos-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: unsigned-macos
+
+      - name: Ad-hoc sign and zip
+        run: |
+          mkdir app && tar -xzf "${BUILD_NAME}-macos-universal.tar.gz" -C app
+          cd app
+          APP="${BUILD_NAME}.app"
+          lipo -archs "$APP/Contents/MacOS/"*
+          # Apple Silicon refuses to run unsigned arm64 code; an ad-hoc signature is enough
+          # for a downloaded app once the quarantine flag is cleared (see README)
+          codesign --force --deep --sign - "$APP"
+          codesign --verify --deep --verbose=2 "$APP"
+          mkdir -p ../dist
+          ditto -c -k --sequesterRsrc --keepParent "$APP" "../dist/${BUILD_NAME}-macos-universal.zip"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist-macos-universal
+          path: dist/*
+          if-no-files-found: error
+
+  release:
+    name: Publish release
+    needs: [build, macos-package]
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: dist-*
+          path: dist
+          merge-multiple: true
+
+      - run: ls -la dist
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*
+          generate_release_notes: true
+          prerelease: ${{ contains(github.ref_name, '-') }}

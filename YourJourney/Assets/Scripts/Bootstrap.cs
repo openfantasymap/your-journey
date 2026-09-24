@@ -41,11 +41,7 @@ public class Bootstrap
 		if ( campaignState == null )
 			scenario = FileManager.LoadScenario( FileManager.GetFullPath( gameStarter.scenarioFileName ) );
 		else
-		{
-			string mydocs = Environment.GetFolderPath( Environment.SpecialFolder.MyDocuments );
-			string basePath = Path.Combine( mydocs, "Your Journey", campaignState.campaign.campaignGUID.ToString(), gameStarter.scenarioFileName );
-			scenario = FileManager.LoadScenario( basePath );
-		}
+			scenario = FileManager.LoadScenario( FileManager.GetFullPathWithCampaign( gameStarter.scenarioFileName, campaignState.campaign.campaignGUID.ToString() ) );
 		if ( scenario != null )
 		{
 			Debug.Log( "LoadLevel()::Loaded: " + gameStarter.scenarioFileName );
