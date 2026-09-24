@@ -78,7 +78,7 @@ public static class AppPaths
 	static string UnixDocumentsFolder()
 	{
 		string xdg = Environment.GetEnvironmentVariable( "XDG_DOCUMENTS_DIR" );
-		if ( !string.IsNullOrEmpty( xdg ) )
+		if ( !string.IsNullOrEmpty( xdg ) && Application.platform != RuntimePlatform.OSXPlayer && Application.platform != RuntimePlatform.OSXEditor )
 			return xdg;
 
 		string home = Environment.GetEnvironmentVariable( "HOME" );
