@@ -46,7 +46,6 @@ public class GameState
 		interactionState = engine.interactionManager.GetState();
 		camState = GlowEngine.FindObjectOfType<CamControl>().GetState();
 
-		//string basePath = Path.Combine( Environment.ExpandEnvironmentVariables( "%userprofile%" ), "Documents", "Your Journey", "Saves" );
 		string basePath = GetFullSavePath();
 		if ( basePath is null )
 			return;
@@ -120,7 +119,6 @@ public class GameState
 	/// </summary>
 	public static GameState LoadState( string filename, Scenario s = null )
 	{
-		//string basePath = Path.Combine( Environment.ExpandEnvironmentVariables( "%userprofile%" ), "Documents", "Your Journey", "Saves" );
 		//string inpath = Path.Combine( basePath, filename );
 
 		try
@@ -152,6 +150,8 @@ public class GameState
 		string basePath = GetFullSavePath();
 
 		List<StateItem> items = new List<StateItem>();
+		if ( basePath is null )
+			return items;
 		DirectoryInfo di = new DirectoryInfo( basePath );
 		FileInfo[] files = di.GetFiles();
 
@@ -218,23 +218,16 @@ public class GameState
 	/// </summary>
 	public static string GetFullSavePath( string filename = "" )
 	{
-		string mydocs = Environment.GetFolderPath( Environment.SpecialFolder.MyDocuments );
-		string basePath = Path.Combine( mydocs, "Your Journey", "Saves" );
-
-		if ( !Directory.Exists( basePath ) )
+		try
 		{
-			var di = Directory.CreateDirectory( basePath );
-			if ( di == null )
-			{
-				Debug.Log( "Could not create the Scenario save folder.\r\nTried to create: " + basePath );
-				return null;
-			}
+			string basePath = AppPaths.SavesFolder;
+			return string.IsNullOrEmpty( filename ) ? basePath : Path.Combine( basePath, filename );
 		}
-
-		if ( !string.IsNullOrEmpty( filename ) )
-			basePath = Path.Combine( mydocs, "Your Journey", "Saves", filename );
-
-		return basePath;
+		catch ( Exception e )
+		{
+			Debug.Log( "Could not create the Scenario save folder: " + e.Message );
+			return null;
+		}
 	}
 }
 

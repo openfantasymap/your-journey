@@ -78,19 +78,9 @@ public class FileManager
 	/// </summary>
 	public static Scenario LoadScenario( string filename )
 	{
-		string mydocs = Environment.GetFolderPath( Environment.SpecialFolder.MyDocuments );
-		string basePath = Path.Combine( mydocs, "Your Journey" );
-		if ( !Directory.Exists( basePath ) )
-			Directory.CreateDirectory( basePath );
-
 		try
 		{
-			string json = "";
-			using ( StreamReader sr = new StreamReader( filename ) )
-			{
-				json = sr.ReadToEnd();
-			}
-
+			string json = File.ReadAllText( filename );
 			var fm = JsonConvert.DeserializeObject<FileManager>( json );
 
 			return Scenario.CreateInstance( fm );
@@ -106,17 +96,11 @@ public class FileManager
 	/// </summary>
 	public static IEnumerable<ProjectItem> GetProjects()
 	{
-		string mydocs = Environment.GetFolderPath( Environment.SpecialFolder.MyDocuments );
-		string basePath = Path.Combine( mydocs, "Your Journey" );
-		if ( !Directory.Exists( basePath ) )
-			Directory.CreateDirectory( basePath );
-		//string basePath = Path.Combine( AppDomain.CurrentDomain.BaseDirectory, "Projects" );
 		List<ProjectItem> items = new List<ProjectItem>();
-		DirectoryInfo di = new DirectoryInfo( basePath );
-		FileInfo[] files = di.GetFiles();
-		foreach ( FileInfo fi in files )
+		DirectoryInfo di = new DirectoryInfo( AppPaths.BaseFolder );
+		//only .jime files - skips .DS_Store, desktop.ini, zips etc
+		foreach ( FileInfo fi in di.GetFiles().Where( IsScenarioFile ) )
 		{
-			//Debug.Log( fi.FullName );
 			Scenario s = LoadScenario( fi.FullName );
 			if ( s != null )
 				items.Add( new ProjectItem()
@@ -136,21 +120,10 @@ public class FileManager
 	/// </summary>
 	public static IEnumerable<ProjectItem> GetCampaigns()
 	{
-		string basePath = Path.Combine( Environment.GetFolderPath( Environment.SpecialFolder.MyDocuments ), "Your Journey" );
-
-		//make sure the project folder exists
-		if ( !Directory.Exists( basePath ) )
-		{
-			var dinfo = Directory.CreateDirectory( basePath );
-			if ( dinfo == null )
-			{
-				return null;
-			}
-		}
+		string basePath = AppPaths.BaseFolder;
 
 		List<ProjectItem> items = new List<ProjectItem>();
 		DirectoryInfo di = new DirectoryInfo( basePath );
-		FileInfo[] files = di.GetFiles().Where( file => file.Extension == ".jime" ).ToArray();
 		//find campaigns
 		foreach ( DirectoryInfo dInfo in di.GetDirectories() )
 		{
@@ -176,20 +149,13 @@ public class FileManager
 
 	public static Campaign LoadCampaign( string campaignGUID )
 	{
-		if ( campaignGUID == "Saves" )
+		if ( campaignGUID == AppPaths.SavesFolderName )
 			return null;
 
-		string basePath = Path.Combine( Environment.GetFolderPath( Environment.SpecialFolder.MyDocuments ), "Your Journey", campaignGUID );
-		string json = "";
 		try
 		{
-			using ( StreamReader sr = new StreamReader( Path.Combine( basePath, campaignGUID + ".json" ) ) )
-			{
-				json = sr.ReadToEnd();
-			}
-
-			var c = JsonConvert.DeserializeObject<Campaign>( json );
-			return c;
+			string json = File.ReadAllText( Path.Combine( AppPaths.CampaignFolder( campaignGUID ), campaignGUID + ".json" ) );
+			return JsonConvert.DeserializeObject<Campaign>( json );
 		}
 		catch
 		{
@@ -202,71 +168,69 @@ public class FileManager
 	/// </summary>
 	public static void UnpackCampaigns()
 	{
-		string basePath = Path.Combine( Environment.GetFolderPath( Environment.SpecialFolder.MyDocuments ), "Your Journey" );
-		if ( !Directory.Exists( basePath ) )
-			Directory.CreateDirectory( basePath );
-
+		string basePath = AppPaths.BaseFolder;
 		DirectoryInfo di = new DirectoryInfo( basePath );
-		//zip files only
-		FileInfo[] files = di.GetFiles().Where( x => x.Extension == ".zip" ).ToArray();
 
-		try
+		//zip files only, each one is handled on its own so a bad zip doesn't block the others
+		foreach ( FileInfo fi in di.GetFiles().Where( x => x.Extension.Equals( ".zip", StringComparison.OrdinalIgnoreCase ) && !x.Name.StartsWith( "." ) ) )
 		{
-			foreach ( FileInfo fi in files )
+			try
 			{
 				using ( ZipArchive archive = ZipFile.OpenRead( fi.FullName ) )
 				{
-					//UnityEngine.Debug.Log( "UNZIPPING: " + fi.FullName );
-					//get the campain's metadata first
-					var meta = archive.Entries.Where( x => x.FullName.EndsWith( ".json" ) ).First();
-					//get the GUID
-					string campaignGUID = meta.Name.Replace( ".json", "" );
-					//UnityEngine.Debug.Log( "CAMPAIGN GUID: " + campaignGUID );
-					//create campaign GUID folder if it doesn't exist
-					DirectoryInfo extractPath = new DirectoryInfo( Path.Combine( basePath, campaignGUID ) );
-					if ( !extractPath.Exists )
+					var entries = archive.Entries.Where( x => !IsJunkZipEntry( x ) ).ToList();
+					//the campaign's metadata file is named after its GUID
+					var meta = entries.FirstOrDefault( x => x.Name.EndsWith( ".json", StringComparison.OrdinalIgnoreCase )
+						&& Guid.TryParse( Path.GetFileNameWithoutExtension( x.Name ), out _ ) );
+					if ( meta == null )
 					{
-						Directory.CreateDirectory( Path.Combine( basePath, campaignGUID ) );
+						UnityEngine.Debug.Log( "UnpackCampaigns() SKIPPED (no campaign metadata): " + fi.Name );
+						continue;
 					}
-					//unzip into campaign folder
-					foreach ( ZipArchiveEntry entry in archive.Entries )
-					{
-						//Gets the full path to ensure that relative segments are removed
-						string destinationPath = Path.GetFullPath( Path.Combine( extractPath.FullName, entry.FullName ) );
+					string campaignGUID = Path.GetFileNameWithoutExtension( meta.Name );
+					string extractPath = AppPaths.CampaignFolder( campaignGUID );
+					Directory.CreateDirectory( extractPath );
 
-						//Ordinal match is safest, case-sensitive volumes can be mounted within volumes that are case-insensitive
-						if ( destinationPath.StartsWith( extractPath.FullName, StringComparison.Ordinal ) )
-							entry.ExtractToFile( destinationPath );
-
-						//UnityEngine.Debug.Log( entry.Name );
-						//UnityEngine.Debug.Log( "destinationPath: " + destinationPath );
-						//UnityEngine.Debug.Log( "extractPath: " + extractPath.FullName );
-					}
+					//campaign packages are flat, so extract by file name only - this also handles zips
+					//re-compressed by Finder/Explorer (files inside a sub folder) and blocks path traversal
+					foreach ( ZipArchiveEntry entry in entries )
+						entry.ExtractToFile( Path.Combine( extractPath, entry.Name ), true );
 				}
 			}
-		}
-		catch ( Exception e )
-		{
-			UnityEngine.Debug.Log( "UnpackCampaigns() ERROR: " + e.Message );
+			catch ( Exception e )
+			{
+				UnityEngine.Debug.Log( "UnpackCampaigns() ERROR: " + fi.Name + ": " + e.Message );
+			}
 		}
 	}
 
 	/// <summary>
-	/// this should build the full path to filename, including the documents folder from ANY system type: windows/mac/linux
+	/// folder entries and macOS metadata (__MACOSX/, ._resource forks, .DS_Store)
+	/// </summary>
+	static bool IsJunkZipEntry( ZipArchiveEntry entry )
+	{
+		string fullName = entry.FullName.Replace( '\\', '/' );
+		return string.IsNullOrEmpty( entry.Name )
+			|| fullName.StartsWith( "__MACOSX/" )
+			|| entry.Name.StartsWith( "._" )
+			|| entry.Name == ".DS_Store";
+	}
+
+	static bool IsScenarioFile( FileInfo fi )
+	{
+		return fi.Extension.Equals( ".jime", StringComparison.OrdinalIgnoreCase ) && !fi.Name.StartsWith( "._" );
+	}
+
+	/// <summary>
+	/// full path to filename inside the "Your Journey" folder on any OS (see AppPaths)
 	/// </summary>
 	public static string GetFullPath( string filename )
 	{
-		string mydocs = Environment.GetFolderPath( Environment.SpecialFolder.MyDocuments );
-		string basePath = Path.Combine( mydocs, "Your Journey", filename );
-
-		return basePath;
+		return Path.Combine( AppPaths.BaseFolder, filename );
 	}
 
 	public static string GetFullPathWithCampaign( string filename, string campaignGUID )
 	{
-		string mydocs = Environment.GetFolderPath( Environment.SpecialFolder.MyDocuments );
-		string basePath = Path.Combine( mydocs, "Your Journey", campaignGUID, filename );
-
-		return basePath;
+		return Path.Combine( AppPaths.CampaignFolder( campaignGUID ), filename );
 	}
 }
